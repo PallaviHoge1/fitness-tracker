@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const SYSTEM_PROMPT = `You are a precise nutrition database. The user will give you food items they ate. Respond with ONLY a valid JSON array. No markdown fences. No preamble. No explanation.
 
@@ -23,37 +22,83 @@ For each distinct food item return:
 }
 
 Rules:
-- Multiple items separated by commas, "and", "+", or newlines → one object per item
-- If grams not specified, use the standard serving size for that food (e.g. 1 cup cooked rice = 158g, 1 large egg = 50g, 1 chicken breast = 174g, 1 medium banana = 118g, 1 slice bread = 30g, 1 tbsp oil = 14g)
-- All values represent the total for the actual quantity consumed — NOT per 100g
+- Multiple items separated by commas, "and", "+", or newlines = one object per item
+- If grams not specified, use the standard serving size for that food
+- All values represent the total for the actual quantity consumed, NOT per 100g
 - Use cooked weight unless raw is specified
-- For dishes (e.g. "biryani", "dal", "pasta") use typical recipe composition
-- If something is truly unidentifiable, return name "unknown" with all numeric fields as 0
+- For dishes like biryani, dal, pasta use typical recipe composition
+- If something is truly unidentifiable, return name unknown with all numeric fields as 0
 - Return ONLY the JSON array, nothing else`;
 
 export async function POST(req: NextRequest) {
+  const debugInfo: string[] = [];
+
   try {
-    const { input } = await req.json();
+    const body = await req.json();
+    const input = body?.input;
+    debugInfo.push("Got input: " + (typeof input === "string" ? input.substring(0, 50) : typeof input));
 
     if (!input || typeof input !== "string" || input.trim().length === 0) {
-      return NextResponse.json({ error: "Missing food input" }, { status: 400 });
+      return NextResponse.json({ error: "Missing food input", debug: debugInfo }, { status: 400 });
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json({ error: "Gemini API key not configured" }, { status: 500 });
+      debugInfo.push("GEMINI_API_KEY is NOT set");
+      return NextResponse.json({ error: "Gemini API key not configured", debug: debugInfo }, { status: 500 });
     }
+    debugInfo.push("API key present, length: " + apiKey.length);
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
-      systemInstruction: SYSTEM_PROMPT,
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
+    const geminiBody = {
+      system_instruction: {
+        parts: [{ text: SYSTEM_PROMPT }],
+      },
+      contents: [
+        {
+          parts: [{ text: input.trim() }],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 2048,
+      },
+    };
+
+    debugInfo.push("Calling Gemini...");
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(geminiBody),
     });
 
-    const result = await model.generateContent(input.trim());
-    const text = result.response.text().trim();
+    debugInfo.push("Gemini status: " + response.status);
 
-    // Clean markdown fences if Gemini wraps them
+    const responseText = await response.text();
+    debugInfo.push("Response length: " + responseText.length);
+
+    if (!response.ok) {
+      debugInfo.push("Error body: " + responseText.substring(0, 500));
+      return NextResponse.json(
+        { error: "Gemini API error: " + response.status, debug: debugInfo },
+        { status: 502 }
+      );
+    }
+
+    const data = JSON.parse(responseText);
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+    if (!text) {
+      debugInfo.push("No text found. Keys: " + Object.keys(data).join(", "));
+      if (data.candidates) {
+        debugInfo.push("Candidates: " + JSON.stringify(data.candidates).substring(0, 300));
+      }
+      return NextResponse.json({ error: "Empty response from AI", debug: debugInfo }, { status: 502 });
+    }
+
+    debugInfo.push("AI text: " + text.substring(0, 100));
+
     const cleaned = text
       .replace(/^```json\s*/i, "")
       .replace(/^```\s*/i, "")
@@ -63,14 +108,15 @@ export async function POST(req: NextRequest) {
     const parsed = JSON.parse(cleaned);
 
     if (!Array.isArray(parsed)) {
-      return NextResponse.json({ error: "Invalid response format" }, { status: 502 });
+      debugInfo.push("Parsed type: " + typeof parsed);
+      return NextResponse.json({ error: "Invalid response format", debug: debugInfo }, { status: 502 });
     }
 
     return NextResponse.json({ items: parsed });
-  } catch (error) {
-    console.error("Food analysis error:", error);
+  } catch (error: any) {
+    debugInfo.push("Exception: " + (error?.message || String(error)));
     return NextResponse.json(
-      { error: "Failed to analyze food. Try rephrasing." },
+      { error: error?.message || "Unknown error", debug: debugInfo },
       { status: 500 }
     );
   }
