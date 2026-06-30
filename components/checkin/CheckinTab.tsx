@@ -11,7 +11,7 @@ import { CheckinData } from "@/lib/types";
 import { LucideIcon } from "lucide-react";
 
 interface FieldDef {
-  key: keyof CheckinData;
+  key: string;
   label: string;
   sub?: string;
   icon: LucideIcon;
@@ -45,7 +45,21 @@ const CHECKIN_FIELDS: FieldDef[] = [
   },
 ];
 
-const DEFAULT_CHECKIN: Omit<CheckinData, "id"> = {
+interface CheckinState {
+  date: string;
+  diet: string | null;
+  workout: string | null;
+  walking: string | null;
+  medication: string | null;
+  sleep: string | null;
+  mood: string | null;
+  energy: number;
+  did_not_follow: boolean;
+  completed_at: string | null;
+  [key: string]: string | number | boolean | null;
+}
+
+const DEFAULT_CHECKIN: CheckinState = {
   date: "",
   diet: null,
   workout: null,
@@ -60,7 +74,7 @@ const DEFAULT_CHECKIN: Omit<CheckinData, "id"> = {
 
 export function CheckinTab() {
   const today = todayISO();
-  const [data, setData] = useState<Omit<CheckinData, "id">>({ ...DEFAULT_CHECKIN, date: today });
+  const [data, setData] = useState<CheckinState>({ ...DEFAULT_CHECKIN, date: today });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -71,7 +85,7 @@ export function CheckinTab() {
     setLoading(true);
     const existing = await getCheckin(today);
     if (existing) {
-      setData(existing);
+      setData(existing as unknown as CheckinState);
     } else {
       setData({ ...DEFAULT_CHECKIN, date: today });
     }
@@ -82,32 +96,32 @@ export function CheckinTab() {
   const isOff = data.did_not_follow;
   const allFilled = CHECKIN_FIELDS.every((f) => data[f.key] !== null);
 
-  function update(key: string, value: any) {
+  function update(key: string, value: string | number) {
     if (isComplete || isOff) return;
     setData((prev) => ({ ...prev, [key]: value }));
   }
 
   async function finish() {
     const final = { ...data, completed_at: new Date().toISOString() };
-    await saveCheckin(final);
     setData(final);
+    await saveCheckin(final as unknown as Omit<CheckinData, "id">);
   }
 
   async function markOff() {
-    const offData: Omit<CheckinData, "id"> = {
+    const offData: CheckinState = {
       ...DEFAULT_CHECKIN,
       date: today,
       did_not_follow: true,
       completed_at: new Date().toISOString(),
     };
-    await saveCheckin(offData);
     setData(offData);
+    await saveCheckin(offData as unknown as Omit<CheckinData, "id">);
   }
 
   async function reset() {
-    const cleared = { ...DEFAULT_CHECKIN, date: today };
-    await saveCheckin(cleared);
+    const cleared: CheckinState = { ...DEFAULT_CHECKIN, date: today };
     setData(cleared);
+    await saveCheckin(cleared as unknown as Omit<CheckinData, "id">);
   }
 
   if (loading) {
